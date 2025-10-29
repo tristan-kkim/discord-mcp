@@ -4,7 +4,6 @@ uvicorn[standard]==0.24.0
 
 # HTTP client and async
 aiohttp==3.9.1
-aioredis==2.0.1
 
 # Data validation and settings
 pydantic==2.5.0
@@ -16,7 +15,7 @@ loguru==0.7.2
 # Retry and resilience
 tenacity==8.2.3
 
-# Redis for caching
+# Redis for caching (redis-py 5.0+ includes async support)
 redis==5.0.1
 
 # Testing

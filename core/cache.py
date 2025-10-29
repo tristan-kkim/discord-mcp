@@ -4,7 +4,7 @@ Redis 기반 캐싱
 import json
 import hashlib
 from typing import Any, Optional, Dict, Union
-import aioredis
+import redis.asyncio as redis
 from loguru import logger
 
 from .schema import ErrorCode, MCPError
@@ -16,13 +16,13 @@ class CacheManager:
     def __init__(self, redis_url: str = "redis://localhost:6379", ttl: int = 300):
         self.redis_url = redis_url
         self.ttl = ttl
-        self._redis: Optional[aioredis.Redis] = None
+        self._redis: Optional[redis.Redis] = None
         self._connected = False
     
     async def connect(self) -> None:
         """Redis 연결"""
         try:
-            self._redis = aioredis.from_url(self.redis_url)
+            self._redis = redis.from_url(self.redis_url)
             await self._redis.ping()
             self._connected = True
             logger.info("Connected to Redis cache")

@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Discord MCP Server
 
 Discord와 통신하는 Model Context Protocol(MCP) 서버입니다. 모든 Discord 기능을 MCP Tool 형태로 노출하여 OpenAI, LangChain, Cursor 등의 MCP 클라이언트에서 안전하게 사용할 수 있습니다.
@@ -361,3 +362,6 @@ pytest --cov=. --cov-report=html
 - ✅ CI/CD 파이프라인
 - ✅ 고급 분석 기능
 - ✅ 보안 강화
+=======
+# discord-mcp
+>>>>>>> 0fb60ca129e37daa6626cef2cafaf6092c3d2252

@@ -279,9 +279,16 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
+## 📚 Documentation
+
+- **Wiki**: [Complete Documentation](https://github.com/tristan-kkim/discord-mcp/wiki)
+- **Installation Guide**: [Step-by-step Setup](https://github.com/tristan-kkim/discord-mcp/wiki/Installation-Guide)
+- **Quick Start**: [5-minute Setup](https://github.com/tristan-kkim/discord-mcp/wiki/Quick-Start)
+- **API Reference**: [Complete API Docs](https://github.com/tristan-kkim/discord-mcp/wiki/API-Endpoints)
+- **Security Guide**: [Best Practices](https://github.com/tristan-kkim/discord-mcp/wiki/Security-Guide)
+
 ## 🆘 Support
 
-- **Documentation**: [GitHub Wiki](https://github.com/tristan-kkim/discord-mcp/wiki)
 - **Issues**: [GitHub Issues](https://github.com/tristan-kkim/discord-mcp/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/tristan-kkim/discord-mcp/discussions)
 
@@ -543,9 +550,16 @@ pytest --cov=. --cov-report=html
 
 이 프로젝트는 MIT 라이선스 하에 배포됩니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
 
+## 📚 문서
+
+- **Wiki**: [완전한 문서](https://github.com/tristan-kkim/discord-mcp/wiki)
+- **설치 가이드**: [단계별 설정](https://github.com/tristan-kkim/discord-mcp/wiki/Installation-Guide)
+- **빠른 시작**: [5분 설정](https://github.com/tristan-kkim/discord-mcp/wiki/Quick-Start)
+- **API 참조**: [완전한 API 문서](https://github.com/tristan-kkim/discord-mcp/wiki/API-Endpoints)
+- **보안 가이드**: [모범 사례](https://github.com/tristan-kkim/discord-mcp/wiki/Security-Guide)
+
 ## 🆘 지원
 
-- **문서**: [GitHub Wiki](https://github.com/tristan-kkim/discord-mcp/wiki)
 - **이슈**: [GitHub Issues](https://github.com/tristan-kkim/discord-mcp/issues)
 - **토론**: [GitHub Discussions](https://github.com/tristan-kkim/discord-mcp/discussions)
 

@@ -3,6 +3,7 @@
 """
 import json
 import sys
+import os
 import uuid
 from typing import Any, Dict, Optional
 from loguru import logger
@@ -93,15 +94,42 @@ def setup_logging(log_level: str = "INFO") -> None:
         serialize=False,
     )
     
-    # 파일 출력 (선택사항)
-    logger.add(
-        "logs/discord-mcp.log",
-        format=JSONFormatter().format,
-        level=log_level,
-        rotation="1 day",
-        retention="30 days",
-        serialize=False,
-    )
+    # 파일 출력 (선택사항, 디렉토리 생성 가능한 경우에만)
+    log_dir = os.environ.get("LOG_DIR", "logs")
+    log_file = os.path.join(log_dir, "discord-mcp.log")
+    
+    try:
+        # 디렉토리 생성 시도
+        if log_dir and log_dir != "logs":
+            # 커스텀 로그 디렉토리 사용
+            os.makedirs(log_dir, exist_ok=True)
+        elif log_dir == "logs":
+            # 기본 logs 디렉토리: 쓰기 가능한 위치 확인
+            # App Engine에서는 /tmp 사용 가능
+            if os.access("/tmp", os.W_OK):
+                log_dir = "/tmp/logs"
+                os.makedirs(log_dir, exist_ok=True)
+                log_file = os.path.join(log_dir, "discord-mcp.log")
+            else:
+                # 현재 디렉토리 시도
+                try:
+                    os.makedirs("logs", exist_ok=True)
+                except (OSError, PermissionError):
+                    # 파일 로깅 건너뛰기
+                    log_file = None
+        
+        if log_file:
+            logger.add(
+                log_file,
+                format=JSONFormatter().format,
+                level=log_level,
+                rotation="1 day",
+                retention="30 days",
+                serialize=False,
+            )
+    except (OSError, PermissionError) as e:
+        # 파일 로깅을 사용할 수 없는 경우 건너뛰기
+        logger.debug(f"File logging disabled: {e}")
 
 
 def log_tool_call(

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://glama.ai/mcp/schemas/server.json",
+  "name": "discord-mcp",
+  "description": "MCP server for interacting with Discord: guilds, channels, messages, threads, reactions, roles.",
+  "repository": "https://github.com/tristan-kkim/discord-mcp",
+  "homepage": "https://glama.ai/mcp/servers/@tristan-kkim/discord-mcp",
+  "maintainers": [
+    "tristan-kkim"
+  ],
+  "tags": [
+    "discord",
+    "chat",
+    "automation",
+    "mcp"
+  ]
+}
+
+

@@ -33,7 +33,9 @@ class DiscordGuild(BaseModel):
     icon_hash: Optional[str] = Field(None, description="아이콘 해시 (압축)")
     splash: Optional[str] = Field(None, description="스플래시 해시")
     discovery_splash: Optional[str] = Field(None, description="디스커버리 스플래시 해시")
-    owner_id: str = Field(..., description="소유자 ID")
+    # GET /users/@me/guilds 는 partial guild 객체를 돌려주고 owner_id가 없다.
+    # 필수로 두면 list_guilds가 항상 ValidationError로 죽는다.
+    owner_id: Optional[str] = Field(None, description="소유자 ID")
     permissions: Optional[str] = Field(None, description="권한")
     region: Optional[str] = Field(None, description="지역")
     afk_channel_id: Optional[str] = Field(None, description="AFK 채널 ID")

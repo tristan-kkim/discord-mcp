@@ -46,10 +46,21 @@ def clear_request_context() -> None:
 
 
 class JSONFormatter:
-    """JSON 포맷터"""
-    
+    """
+    JSON 포맷터.
+
+    loguru는 format 콜러블의 반환값을 '포맷 템플릿'으로 보고 다시 .format(record)를
+    적용한다. 그래서 JSON을 그대로 돌려주면 중괄호가 필드로 해석돼
+    KeyError: '"timestamp"' 로 죽는다. 직렬화 결과는 extra에 넣고,
+    템플릿은 그 값을 가리키기만 해야 한다.
+    """
+
     def format(self, record: Dict[str, Any]) -> str:
-        """레코드를 JSON으로 포맷"""
+        record["extra"]["_json"] = self.serialize(record)
+        return "{extra[_json]}\n"
+
+    def serialize(self, record: Dict[str, Any]) -> str:
+        """레코드를 JSON 문자열로 직렬화"""
         # 기본 필드
         log_data = {
             "timestamp": record["time"].isoformat(),
@@ -76,6 +87,8 @@ class JSONFormatter:
         # 추가 필드들
         extra = record.get("extra", {})
         for key, value in extra.items():
+            if key == "_json":  # 우리가 방금 넣은 직렬화 결과. 재귀 방지.
+                continue
             log_data[key] = value
             
         return json.dumps(log_data, ensure_ascii=False)
@@ -86,9 +99,11 @@ def setup_logging(log_level: str = "INFO") -> None:
     # 기존 핸들러 제거
     logger.remove()
     
-    # JSON 포맷터로 콘솔 출력
+    # JSON 포맷터로 콘솔 출력.
+    # 반드시 stderr여야 한다 — stdio 전송에서는 stdout이 JSON-RPC 채널이라
+    # 로그 한 줄만 섞여도 클라이언트의 프레임 파싱이 깨진다.
     logger.add(
-        sys.stdout,
+        sys.stderr,
         format=JSONFormatter().format,
         level=log_level,
         serialize=False,
@@ -166,10 +181,13 @@ def log_tool_call(
     # 추가 필드들
     log_data.update(kwargs)
     
+    # logger.info(msg, **kw)는 kw를 '메시지 포맷 인자'로 소비해버려 필드가 유실된다.
+    # 구조화 로그로 남기려면 bind()로 record["extra"]에 실어야 한다.
+    bound = logger.bind(**log_data)
     if success:
-        logger.info("Tool call completed", **log_data)
+        bound.info("Tool call completed")
     else:
-        logger.error("Tool call failed", **log_data)
+        bound.error("Tool call failed")
 
 
 def log_discord_api_call(
@@ -193,12 +211,13 @@ def log_discord_api_call(
         
     log_data.update(kwargs)
     
+    bound = logger.bind(**log_data)
     if 200 <= status_code < 300:
-        logger.info("Discord API call successful", **log_data)
+        bound.info("Discord API call successful")
     elif status_code == 429:
-        logger.warning("Discord API rate limited", **log_data)
+        bound.warning("Discord API rate limited")
     else:
-        logger.error("Discord API call failed", **log_data)
+        bound.error("Discord API call failed")
 
 
 # 로깅 초기화

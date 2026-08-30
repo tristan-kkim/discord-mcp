@@ -6,8 +6,6 @@ from datetime import datetime, timedelta
 import re
 from loguru import logger
 
-from ...core.tool_registry import tool_registry
-from ...core.schema import create_json_schema, DiscordMessage
 from ...core.logging import log_tool_call, set_request_context
 from ...adapters.discord.http import DiscordClient
 
@@ -62,7 +60,7 @@ async def summarize_messages(
     max_messages: int = 10
 ) -> Dict[str, Any]:
     """메시지 요약"""
-    set_request_context(tool_name="discord.summarize_messages", channel_id=channel_id)
+    set_request_context(tool_name="summarize_messages", channel_id=channel_id)
     
     if not _discord_client:
         raise ValueError("Discord client not initialized")
@@ -112,12 +110,12 @@ async def summarize_messages(
             ]
         }
         
-        log_tool_call("discord.summarize_messages", channel_id=channel_id, success=True)
+        log_tool_call("summarize_messages", channel_id=channel_id, success=True)
         return summary
         
     except Exception as e:
         logger.error(f"Failed to summarize messages in channel {channel_id}: {e}")
-        log_tool_call("discord.summarize_messages", channel_id=channel_id, success=False, error_message=str(e))
+        log_tool_call("summarize_messages", channel_id=channel_id, success=False, error_message=str(e))
         raise
 
 
@@ -128,7 +126,7 @@ async def rank_messages(
     sort_by: str = "score"
 ) -> Dict[str, Any]:
     """메시지 중요도 순위"""
-    set_request_context(tool_name="discord.rank_messages", channel_id=channel_id)
+    set_request_context(tool_name="rank_messages", channel_id=channel_id)
     
     if not _discord_client:
         raise ValueError("Discord client not initialized")
@@ -174,12 +172,12 @@ async def rank_messages(
             "ranked_messages": ranked_messages
         }
         
-        log_tool_call("discord.rank_messages", channel_id=channel_id, success=True)
+        log_tool_call("rank_messages", channel_id=channel_id, success=True)
         return result
         
     except Exception as e:
         logger.error(f"Failed to rank messages in channel {channel_id}: {e}")
-        log_tool_call("discord.rank_messages", channel_id=channel_id, success=False, error_message=str(e))
+        log_tool_call("rank_messages", channel_id=channel_id, success=False, error_message=str(e))
         raise
 
 
@@ -189,7 +187,7 @@ async def sync_since(
     limit: int = 50
 ) -> Dict[str, Any]:
     """마지막 메시지 ID 이후 동기화"""
-    set_request_context(tool_name="discord.sync_since", channel_id=channel_id)
+    set_request_context(tool_name="sync_since", channel_id=channel_id)
     
     if not _discord_client:
         raise ValueError("Discord client not initialized")
@@ -215,12 +213,12 @@ async def sync_since(
             "messages": [msg.model_dump() for msg in messages]
         }
         
-        log_tool_call("discord.sync_since", channel_id=channel_id, success=True)
+        log_tool_call("sync_since", channel_id=channel_id, success=True)
         return result
         
     except Exception as e:
         logger.error(f"Failed to sync messages since {last_message_id} in channel {channel_id}: {e}")
-        log_tool_call("discord.sync_since", channel_id=channel_id, success=False, error_message=str(e))
+        log_tool_call("sync_since", channel_id=channel_id, success=False, error_message=str(e))
         raise
 
 
@@ -230,7 +228,7 @@ async def analyze_channel_activity(
     limit: int = 1000
 ) -> Dict[str, Any]:
     """채널 활동 분석"""
-    set_request_context(tool_name="discord.analyze_channel_activity", channel_id=channel_id)
+    set_request_context(tool_name="analyze_channel_activity", channel_id=channel_id)
     
     if not _discord_client:
         raise ValueError("Discord client not initialized")
@@ -303,154 +301,13 @@ async def analyze_channel_activity(
             "avg_messages_per_author": len(messages) / len(author_counts) if author_counts else 0
         }
         
-        log_tool_call("discord.analyze_channel_activity", channel_id=channel_id, success=True)
+        log_tool_call("analyze_channel_activity", channel_id=channel_id, success=True)
         return result
         
     except Exception as e:
         logger.error(f"Failed to analyze channel activity for {channel_id}: {e}")
-        log_tool_call("discord.analyze_channel_activity", channel_id=channel_id, success=False, error_message=str(e))
+        log_tool_call("analyze_channel_activity", channel_id=channel_id, success=False, error_message=str(e))
         raise
 
 
 # 툴 등록
-def register_advanced_tools():
-    """고도화 기능 툴 등록"""
-    
-    # discord.summarize_messages
-    tool_registry.register_tool(
-        name="discord.summarize_messages",
-        handler=summarize_messages,
-        input_schema={
-            "type": "object",
-            "properties": {
-                "channel_id": {
-                    "type": "string",
-                    "description": "채널 ID"
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "조회할 메시지 수",
-                    "default": 50,
-                    "minimum": 1,
-                    "maximum": 100
-                },
-                "keywords": {
-                    "type": "array",
-                    "description": "중요도 계산용 키워드 목록",
-                    "items": {"type": "string"}
-                },
-                "min_score": {
-                    "type": "number",
-                    "description": "최소 점수",
-                    "default": 2.0
-                },
-                "max_messages": {
-                    "type": "integer",
-                    "description": "요약에 포함할 최대 메시지 수",
-                    "default": 10,
-                    "minimum": 1,
-                    "maximum": 50
-                }
-            },
-            "required": ["channel_id"]
-        },
-        output_schema=create_json_schema(Dict[str, Any]),
-        description="채널의 메시지를 분석하여 중요도 기반으로 요약합니다."
-    )
-    
-    # discord.rank_messages
-    tool_registry.register_tool(
-        name="discord.rank_messages",
-        handler=rank_messages,
-        input_schema={
-            "type": "object",
-            "properties": {
-                "channel_id": {
-                    "type": "string",
-                    "description": "채널 ID"
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "조회할 메시지 수",
-                    "default": 100,
-                    "minimum": 1,
-                    "maximum": 100
-                },
-                "keywords": {
-                    "type": "array",
-                    "description": "중요도 계산용 키워드 목록",
-                    "items": {"type": "string"}
-                },
-                "sort_by": {
-                    "type": "string",
-                    "description": "정렬 기준",
-                    "enum": ["score", "reactions", "timestamp"],
-                    "default": "score"
-                }
-            },
-            "required": ["channel_id"]
-        },
-        output_schema=create_json_schema(Dict[str, Any]),
-        description="채널의 메시지를 중요도 순으로 정렬합니다."
-    )
-    
-    # discord.sync_since
-    tool_registry.register_tool(
-        name="discord.sync_since",
-        handler=sync_since,
-        input_schema={
-            "type": "object",
-            "properties": {
-                "channel_id": {
-                    "type": "string",
-                    "description": "채널 ID"
-                },
-                "last_message_id": {
-                    "type": "string",
-                    "description": "마지막 메시지 ID"
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "조회할 메시지 수",
-                    "default": 50,
-                    "minimum": 1,
-                    "maximum": 100
-                }
-            },
-            "required": ["channel_id", "last_message_id"]
-        },
-        output_schema=create_json_schema(Dict[str, Any]),
-        description="마지막 메시지 ID 이후의 새 메시지들을 동기화합니다."
-    )
-    
-    # discord.analyze_channel_activity
-    tool_registry.register_tool(
-        name="discord.analyze_channel_activity",
-        handler=analyze_channel_activity,
-        input_schema={
-            "type": "object",
-            "properties": {
-                "channel_id": {
-                    "type": "string",
-                    "description": "채널 ID"
-                },
-                "days": {
-                    "type": "integer",
-                    "description": "분석 기간 (일)",
-                    "default": 7,
-                    "minimum": 1,
-                    "maximum": 30
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "조회할 메시지 수",
-                    "default": 1000,
-                    "minimum": 1,
-                    "maximum": 1000
-                }
-            },
-            "required": ["channel_id"]
-        },
-        output_schema=create_json_schema(Dict[str, Any]),
-        description="채널의 활동 패턴을 분석합니다."
-    )

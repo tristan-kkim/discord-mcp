@@ -1,114 +1,117 @@
 """
-서버 통합 테스트
+MCP 프로토콜 통합 테스트.
+
+실제 MCP 클라이언트를 서버에 붙여 initialize → tools/list → tools/call 왕복을
+검증한다. 이전 버전의 테스트는 FastAPI TestClient로 자체 REST 엔드포인트를
+때렸는데, 그건 MCP가 아니어서 어떤 MCP 클라이언트도 이 서버를 쓸 수 없었다.
 """
+import re
+from unittest.mock import AsyncMock
+
 import pytest
-import asyncio
-from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, patch
-from server.main import app
+from mcp import Client
+
+from discord_mcp.adapters.discord.models import DiscordChannel, DiscordGuild
+from discord_mcp.config import Settings
+from discord_mcp.server import build_server
+
+# MCP 툴 이름 제약. Claude를 포함한 주요 클라이언트가 이 패턴으로 검증한다 —
+# 점(.)이 들어간 이름은 거부된다.
+TOOL_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
 
 
 @pytest.fixture
-def client():
-    """테스트 클라이언트"""
-    return TestClient(app)
+def settings():
+    return Settings(
+        bot_token="test-token",
+        default_guild_id=None,
+        redis_url=None,
+        log_level="CRITICAL",
+    )
 
 
 @pytest.fixture
-def mock_discord_client():
-    """Mock Discord 클라이언트"""
+def fake_discord(monkeypatch):
+    """네트워크를 타지 않도록 DiscordClient를 대체한다."""
     client = AsyncMock()
+    client.get_guilds.return_value = [
+        DiscordGuild(id="1", name="Test Guild", icon=None, description=None, member_count=3)
+    ]
+    client.get_channels.return_value = [
+        DiscordChannel(id="10", name="general", type=0, guild_id="1")
+    ]
+    monkeypatch.setattr(
+        "discord_mcp.server.DiscordClient", lambda token, **kwargs: client
+    )
     return client
 
 
-def test_root_endpoint(client):
-    """루트 엔드포인트 테스트"""
-    response = client.get("/")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["name"] == "Discord MCP Server"
-    assert data["status"] == "running"
+async def test_initialize_advertises_server(settings, fake_discord):
+    """MCP 핸드셰이크가 성립하고 서버 정보가 넘어온다."""
+    async with Client(build_server(settings)) as session:
+        assert session.server_info.name == "discord-mcp"
+        assert session.server_capabilities.tools is not None
 
 
-def test_health_endpoint(client):
-    """헬스체크 엔드포인트 테스트"""
-    response = client.get("/health")
-    assert response.status_code == 200
-    data = response.json()
-    assert "status" in data
-    assert "timestamp" in data
-    assert "uptime" in data
+async def test_tool_names_are_client_compatible(settings, fake_discord):
+    """모든 툴 이름이 클라이언트 검증 패턴을 통과해야 한다."""
+    async with Client(build_server(settings)) as session:
+        tools = (await session.list_tools()).tools
+
+    assert tools, "no tools registered"
+    offenders = [t.name for t in tools if not TOOL_NAME_PATTERN.match(t.name)]
+    assert offenders == [], f"tool names rejected by MCP clients: {offenders}"
 
 
-def test_metrics_endpoint(client):
-    """메트릭 엔드포인트 테스트"""
-    response = client.get("/metrics")
-    assert response.status_code == 200
-    data = response.json()
-    assert isinstance(data, dict)
+async def test_every_tool_has_description_and_schema(settings, fake_discord):
+    """설명 없는 툴은 모델이 언제 써야 할지 알 수 없다."""
+    async with Client(build_server(settings)) as session:
+        tools = (await session.list_tools()).tools
+
+    for tool in tools:
+        assert tool.description, f"{tool.name} has no description"
+        assert tool.input_schema.get("type") == "object", f"{tool.name} has a bad inputSchema"
 
 
-def test_list_tools_endpoint(client):
-    """툴 목록 조회 엔드포인트 테스트"""
-    response = client.post("/mcp/list_tools")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["success"] is True
-    assert "tools" in data["data"]
+async def test_call_tool_returns_content(settings, fake_discord):
+    """tools/call이 MCP 결과 형식으로 돌아온다."""
+    async with Client(build_server(settings)) as session:
+        result = await session.call_tool("list_guilds", {})
+
+    assert result.is_error is False
+    assert result.content, "tool returned no content blocks"
+    assert result.structured_content["result"]["count"] == 1
+    assert result.structured_content["result"]["guilds"][0]["name"] == "Test Guild"
 
 
-def test_call_tool_endpoint_invalid_tool(client):
-    """잘못된 툴 호출 테스트"""
-    response = client.post("/mcp/call_tool", json={
-        "method": "call_tool",
-        "params": {
-            "tool": "invalid_tool",
-            "params": {}
-        }
-    })
-    assert response.status_code == 400
+async def test_tool_failure_is_reported_as_is_error(settings, fake_discord):
+    """툴 실패는 예외가 아니라 isError=true 결과로 나와야 한다."""
+    fake_discord.get_guilds.side_effect = RuntimeError("discord is down")
+
+    async with Client(build_server(settings)) as session:
+        result = await session.call_tool("list_guilds", {})
+
+    assert result.is_error is True
 
 
-def test_mcp_endpoint(client):
-    """MCP 엔드포인트 테스트"""
-    response = client.post("/mcp", json={
-        "method": "list_tools",
-        "params": {}
-    })
-    assert response.status_code == 200
-    data = response.json()
-    assert data["success"] is True
+async def test_default_guild_id_makes_guild_id_optional(fake_discord):
+    """DISCORD_GUILD_ID가 있으면 guild_id 없이 호출된다."""
+    settings = Settings(
+        bot_token="test-token",
+        default_guild_id="1",
+        redis_url=None,
+        log_level="CRITICAL",
+    )
+    async with Client(build_server(settings)) as session:
+        result = await session.call_tool("list_channels", {})
+
+    assert result.is_error is False
+    fake_discord.get_channels.assert_awaited_once_with("1")
 
 
-@pytest.mark.asyncio
-async def test_server_startup():
-    """서버 시작 테스트"""
-    # 환경변수 설정
-    import os
-    os.environ["DISCORD_BOT_TOKEN"] = "test_token"
-    os.environ["REDIS_URL"] = "redis://localhost:6379"
-    
-    # Mock 설정
-    with patch('server.main.DiscordClient') as mock_client_class:
-        mock_client = AsyncMock()
-        mock_client_class.return_value = mock_client
-        
-        with patch('server.main.cache_manager.connect'):
-            # 서버 시작 테스트
-            from server.main import lifespan
-            async with lifespan(app):
-                pass
+async def test_missing_guild_id_without_default_is_an_error(settings, fake_discord):
+    """기본 길드가 없으면 guild_id 누락은 명확한 에러여야 한다."""
+    async with Client(build_server(settings)) as session:
+        result = await session.call_tool("list_channels", {})
 
-
-def test_error_handling(client):
-    """에러 핸들링 테스트"""
-    # 잘못된 JSON 요청
-    response = client.post("/mcp/call_tool", data="invalid json")
-    assert response.status_code == 422
-    
-    # 잘못된 메서드
-    response = client.post("/mcp", json={
-        "method": "invalid_method",
-        "params": {}
-    })
-    assert response.status_code == 400
+    assert result.is_error is True

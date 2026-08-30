@@ -3,7 +3,7 @@
 """
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from tools.discord.channels import (
+from discord_mcp.tools.discord.channels import (
     list_guilds, list_channels, get_channel, 
     create_channel, update_channel, delete_channel
 )
@@ -48,7 +48,7 @@ async def test_list_guilds(mock_discord_client, sample_guild):
     mock_discord_client.get_guilds.return_value = [mock_guild]
     
     # 툴 클라이언트 설정
-    from tools.discord.channels import set_discord_client
+    from discord_mcp.tools.discord.channels import set_discord_client
     set_discord_client(mock_discord_client)
     
     # 테스트 실행
@@ -69,7 +69,7 @@ async def test_list_channels(mock_discord_client, sample_channel):
     mock_discord_client.get_channels.return_value = [mock_channel]
     
     # 툴 클라이언트 설정
-    from tools.discord.channels import set_discord_client
+    from discord_mcp.tools.discord.channels import set_discord_client
     set_discord_client(mock_discord_client)
     
     # 테스트 실행
@@ -91,7 +91,7 @@ async def test_get_channel(mock_discord_client, sample_channel):
     mock_discord_client.get_channel.return_value = mock_channel
     
     # 툴 클라이언트 설정
-    from tools.discord.channels import set_discord_client
+    from discord_mcp.tools.discord.channels import set_discord_client
     set_discord_client(mock_discord_client)
     
     # 테스트 실행
@@ -111,7 +111,7 @@ async def test_create_channel(mock_discord_client, sample_channel):
     mock_discord_client.create_channel.return_value = mock_channel
     
     # 툴 클라이언트 설정
-    from tools.discord.channels import set_discord_client
+    from discord_mcp.tools.discord.channels import set_discord_client
     set_discord_client(mock_discord_client)
     
     # 테스트 실행
@@ -142,7 +142,7 @@ async def test_update_channel(mock_discord_client, sample_channel):
     mock_discord_client.update_channel.return_value = mock_channel
     
     # 툴 클라이언트 설정
-    from tools.discord.channels import set_discord_client
+    from discord_mcp.tools.discord.channels import set_discord_client
     set_discord_client(mock_discord_client)
     
     # 테스트 실행
@@ -169,7 +169,7 @@ async def test_delete_channel(mock_discord_client):
     mock_discord_client.delete_channel.return_value = None
     
     # 툴 클라이언트 설정
-    from tools.discord.channels import set_discord_client
+    from discord_mcp.tools.discord.channels import set_discord_client
     set_discord_client(mock_discord_client)
     
     # 테스트 실행
@@ -184,7 +184,7 @@ async def test_delete_channel(mock_discord_client):
 async def test_list_guilds_no_client():
     """클라이언트 미설정 시 에러 테스트"""
     # 툴 클라이언트 설정 해제
-    from tools.discord.channels import set_discord_client
+    from discord_mcp.tools.discord.channels import set_discord_client
     set_discord_client(None)
     
     # 테스트 실행 및 검증

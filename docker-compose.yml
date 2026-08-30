@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   discord-mcp:
     build: .
@@ -7,16 +5,12 @@ services:
       - "8000:8000"
     environment:
       - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      # 서버가 하나로 고정된 배포라면 설정해 두면 guild_id 인자를 생략할 수 있다.
+      - DISCORD_GUILD_ID=${DISCORD_GUILD_ID:-}
       - REDIS_URL=redis://redis:6379
       - LOG_LEVEL=INFO
-      - RATE_LIMIT_ENABLED=true
-      - CACHE_TTL=300
-      - HOST=0.0.0.0
-      - PORT=8000
     depends_on:
       - redis
-    volumes:
-      - ./logs:/app/logs
     restart: unless-stopped
     networks:
       - discord-mcp-network

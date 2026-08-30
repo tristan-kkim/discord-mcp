@@ -4,8 +4,12 @@ Redis 기반 캐싱
 import json
 import hashlib
 from typing import Any, Optional, Dict, Union
-import redis.asyncio as redis
 from loguru import logger
+
+try:  # redis는 선택 의존성이다 (`pip install discord-mcp[redis]`).
+    import redis.asyncio as redis
+except ImportError:  # pragma: no cover - redis 미설치 환경
+    redis = None
 
 from .schema import ErrorCode, MCPError
 
@@ -16,11 +20,15 @@ class CacheManager:
     def __init__(self, redis_url: str = "redis://localhost:6379", ttl: int = 300):
         self.redis_url = redis_url
         self.ttl = ttl
-        self._redis: Optional[redis.Redis] = None
+        self._redis: Optional["redis.Redis"] = None
         self._connected = False
     
     async def connect(self) -> None:
-        """Redis 연결"""
+        """Redis 연결. redis 미설치/미가동이면 캐시 없이 동작한다."""
+        if redis is None:
+            logger.info("redis not installed; running without cache")
+            self._connected = False
+            return
         try:
             self._redis = redis.from_url(self.redis_url)
             await self._redis.ping()

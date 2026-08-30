@@ -359,11 +359,16 @@ class DiscordClient:
         """메시지 수정"""
         # 내용 정리
         content = self._sanitize_content(content)
-        
-        data = {"content": content}
+
+        # _sanitize_content는 리터럴 "@everyone"만 치환한다. 역할/유저 멘션
+        # 문법(<@&123>)은 그대로 통과하므로 allowed_mentions로 함께 막아야 한다.
+        data = {
+            "content": content,
+            "allowed_mentions": {"parse": []},
+        }
         if embeds:
             data["embeds"] = [embed.model_dump() for embed in embeds]
-        
+
         response = await self._make_request_with_retry("PATCH", f"/channels/{channel_id}/messages/{message_id}", data=data)
         
         # 캐시 무효화
@@ -550,7 +555,14 @@ class DiscordClient:
         embeds: Optional[List[DiscordEmbed]] = None
     ) -> None:
         """웹훅으로 메시지 전송"""
-        data = {"content": content}
+        # send_message와 동일한 멘션 가드를 적용한다. 없으면 모델이 웹훅 경로로
+        # @everyone 필터를 그대로 우회할 수 있다.
+        content = self._sanitize_content(content)
+
+        data = {
+            "content": content,
+            "allowed_mentions": {"parse": []},
+        }
         if username:
             data["username"] = username
         if avatar_url:

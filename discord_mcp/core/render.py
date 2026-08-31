@@ -59,6 +59,22 @@ def channel_brief(c: Dict[str, Any]) -> Dict[str, Any]:
     })
 
 
+# https://discord.com/developers/docs/resources/channel#message-object-message-types
+# 본문을 갖는 정상 메시지 타입. 나머지는 Discord가 만든 시스템 메시지라
+# content가 비어 있는 게 정상이다 — 이걸 구분하지 않으면 모델은 빈 항목을
+# 보고 "본문을 못 읽었다"고 오해한다. 실제로 pin_message가 채널에 type 6을 남긴다.
+CONTENT_BEARING_TYPES = {0, 19, 20, 23}
+
+SYSTEM_MESSAGE_TYPES = {
+    1: "recipient_added", 2: "recipient_removed", 3: "call",
+    4: "channel_name_changed", 5: "channel_icon_changed",
+    6: "pinned_a_message", 7: "member_joined", 8: "server_boosted",
+    12: "channel_followed", 15: "stage_started", 18: "thread_created",
+    21: "thread_starter", 22: "invite_reminder", 24: "automod_action",
+    46: "poll_result",
+}
+
+
 def _author_brief(a: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not a:
         return None
@@ -95,8 +111,12 @@ def message_brief(m: Dict[str, Any], content_limit: Optional[int] = None) -> Dic
     ]
     ref = m.get("message_reference") or {}
     content, cut = _truncate(m.get("content"), content_limit)
+    kind = m.get("type", 0)
     return _drop_empty({
         "id": m.get("id"),
+        # 시스템 메시지는 무엇 때문에 생긴 것인지 밝힌다. 안 그러면 본문 없는
+        # 항목이 정체불명으로 남는다.
+        "system_event": SYSTEM_MESSAGE_TYPES.get(kind) if kind not in CONTENT_BEARING_TYPES else None,
         "author": _author_brief(m.get("author")),
         "content": content,
         "truncated": cut or None,
@@ -178,9 +198,14 @@ CONTENT_INTENT_HINT = (
 
 
 def content_intent_warning(briefs: List[Dict[str, Any]]) -> Optional[str]:
-    """전부 본문이 비어 있으면 경고 문자열, 아니면 None."""
-    if not briefs:
+    """본문을 가져야 할 메시지가 전부 비어 있으면 경고, 아니면 None.
+
+    시스템 메시지는 원래 본문이 없다. 이걸 세면 핀·입장 알림만 있는 채널에서
+    Intent가 켜져 있는데도 꺼졌다고 오진한다.
+    """
+    real = [b for b in briefs if not b.get("system_event")]
+    if not real:
         return None
-    if any(b.get("content") or b.get("embeds") or b.get("attachments") for b in briefs):
+    if any(b.get("content") or b.get("embeds") or b.get("attachments") for b in real):
         return None
     return CONTENT_INTENT_HINT

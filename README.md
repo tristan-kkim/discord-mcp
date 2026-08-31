@@ -160,6 +160,14 @@ this channel_id"*, not as `Error executing tool list_messages`.
 
 > **On pinning:** Discord split `PIN_MESSAGES` out of `MANAGE_MESSAGES`. A bot invited before
 > that split can delete messages but not pin them, and `get_permissions` reports exactly that.
+> Note that pinning also posts a visible "pinned a message" notice in the channel which
+> `unpin_message` does not remove; it comes back labelled `system_event: pinned_a_message`, so
+> `delete_message` can clear it.
+
+> **On system messages:** joins, pins, thread creations and the like carry no body by design.
+> They are labelled with `system_event` rather than appearing as blank entries, and they are
+> excluded from the empty-content check — otherwise a channel of nothing but notices would be
+> reported as a disabled Message Content Intent.
 
 > **On `get_permissions`:** it returns permission *names*, not bitfields, plus the list of
 > tools that will fail and what each one is missing. Pass `channel_id` to apply that channel's

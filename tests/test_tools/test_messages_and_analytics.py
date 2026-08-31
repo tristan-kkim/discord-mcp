@@ -307,3 +307,58 @@ async def test_activity_stats_use_full_text(client):
     client.iter_messages.return_value = [make_message(content="a" * 1000 + " http://x.io")]
 
     assert (await advanced.analyze_channel_activity("c1", days=7))["link_ratio"] == 1.0
+
+
+# ------------------------------------------------------------- 시스템 메시지
+def _system(id="1", kind=6):
+    """Discord가 만든 시스템 메시지. content가 비어 있는 게 정상이다."""
+    return DiscordMessage(
+        id=id, channel_id="c1", author={"id": "b", "username": "bot"},
+        content="", timestamp="2026-01-01T00:00:00+00:00", type=kind,
+    )
+
+
+async def test_system_messages_say_what_they_are(client):
+    """
+    pin_message는 채널에 type 6을 남기고 unpin으로는 안 지워진다. 라벨이
+    없으면 모델에게는 본문 없는 정체불명 항목으로 보인다.
+    """
+    client.iter_messages.return_value = [_system(kind=6)]
+
+    m = (await messages.list_messages("c1"))["messages"][0]
+
+    assert m["system_event"] == "pinned_a_message"
+
+
+async def test_normal_messages_carry_no_system_label(client):
+    client.iter_messages.return_value = [make_message()]
+
+    assert "system_event" not in (await messages.list_messages("c1"))["messages"][0]
+
+
+async def test_replies_are_not_mistaken_for_system_messages(client):
+    """type 19(REPLY)는 본문을 갖는 정상 메시지다."""
+    m = make_message()
+    m.type = 19
+    client.iter_messages.return_value = [m]
+
+    brief = (await messages.list_messages("c1"))["messages"][0]
+    assert "system_event" not in brief
+    assert brief["content"] == "hello"
+
+
+async def test_system_messages_do_not_trigger_the_intent_warning(client):
+    """
+    핀·입장 알림만 있는 채널에서 Intent가 켜져 있는데도 꺼졌다고 오진하면,
+    사용자를 없는 문제를 고치러 보내게 된다.
+    """
+    client.iter_messages.return_value = [_system(kind=6), _system(id="2", kind=7)]
+
+    assert "warning" not in await messages.list_messages("c1")
+
+
+async def test_a_real_blank_message_still_warns(client):
+    """시스템 메시지를 걸러내되, 진짜 빈 본문은 여전히 잡아야 한다."""
+    client.iter_messages.return_value = [_system(kind=6), make_message(content="")]
+
+    assert "warning" in await messages.list_messages("c1")

@@ -337,7 +337,7 @@ def build_server(settings: Settings) -> MCPServer:
     @mcp.tool(name="pin_message", annotations=WRITE)
     @_tool_errors
     async def _pin_message(channel_id: ChannelId, message_id: MessageId) -> Dict[str, Any]:
-        """Pin a message to its channel. A channel holds at most 50 pins."""
+        """Pin a message to its channel. A channel holds at most 50 pins. Discord also posts a visible "pinned a message" notice in the channel, which unpin_message does not remove — delete_message on that notice does."""
         return await reactions.pin_message(channel_id, message_id)
 
     @mcp.tool(name="unpin_message", annotations=WRITE)

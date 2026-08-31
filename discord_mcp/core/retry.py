@@ -84,12 +84,16 @@ class DiscordAPIError(Exception):
         message: str,
         status_code: Optional[int] = None,
         retry_after: Optional[float] = None,
-        rate_limited: bool = False
+        rate_limited: bool = False,
+        discord_code: Optional[int] = None,
     ):
         super().__init__(message)
         self.status_code = status_code
         self.retry_after = retry_after
         self.rate_limited = rate_limited
+        # Discord의 JSON 에러 코드 (50001 Missing Access 등). HTTP status보다
+        # 구체적이라, 모델에게 무엇을 고쳐야 하는지 알려줄 때 이걸 먼저 본다.
+        self.discord_code = discord_code
 
 
 class RateLimitError(DiscordAPIError):

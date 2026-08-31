@@ -61,7 +61,7 @@ async def test_stdio_subprocess_full_round_trip(stdio_server):
         assert session.server_info.name == "discord-mcp"
 
         tools = (await session.list_tools()).tools
-        assert len(tools) == 31, f"expected 31 tools, got {len(tools)}"
+        assert len(tools) == 33, f"expected 33 tools, got {len(tools)}"
 
         guilds = await session.call_tool("list_guilds", {})
         assert guilds.is_error is False
@@ -84,3 +84,58 @@ async def test_unknown_tool_is_a_protocol_error(stdio_server):
     async with Client(stdio_server) as session:
         result = await session.call_tool("no_such_tool", {})
     assert result.is_error is True
+
+
+async def test_missing_access_reaches_the_model_over_stdio(stdio_server):
+    """
+    가장 중요한 왕복이다. 봇이 볼 수 없는 채널을 읽으면 Discord는
+    `{"message": "Missing Access", "code": 50001}`을 준다. 이 이유가 프로세스
+    경계를 넘어 모델에게 도달하지 않으면, 모델은 `Error executing tool
+    list_messages` 한 줄만 보고 다음에 무엇을 할지 알 수 없다.
+    """
+    async with Client(stdio_server) as session:
+        result = await session.call_tool("list_messages", {"channel_id": "444"})
+
+    assert result.is_error is True
+    text = " ".join(getattr(block, "text", "") for block in result.content)
+    assert "Missing Access" in text
+    assert "get_permissions" in text, "the error should point at the diagnostic tool"
+
+
+async def test_get_permissions_names_the_blocked_tools(stdio_server):
+    """403을 만난 모델이 다음에 부를 툴이 실제로 원인을 짚어줘야 한다."""
+    async with Client(stdio_server) as session:
+        result = await session.call_tool("get_permissions", {})
+
+    assert result.is_error is False
+    report = result.structured_content["result"]
+    assert "VIEW_CHANNEL" in report["guild_permissions"]
+    # 스텁 봇에는 MANAGE_CHANNELS가 없으므로 채널 관리 툴이 막혀 있어야 한다.
+    assert "MANAGE_CHANNELS" in report["blocked_tools"]["create_channel"]
+
+
+async def test_search_scans_history_instead_of_calling_discord_search(stdio_server):
+    """
+    스텁에는 `/guilds/*/messages/search` 라우트가 없다. 이전 구현이었다면
+    404로 죽는다. 지금은 채널 기록을 읽어 여기서 거른다.
+    """
+    async with Client(stdio_server) as session:
+        result = await session.call_tool(
+            "search_messages", {"channel_id": "222", "query": "hello"}
+        )
+
+    assert result.is_error is False
+    found = result.structured_content["result"]
+    assert found["count"] == 1
+    assert found["messages"][0]["id"] == "333"
+
+
+async def test_search_miss_says_how_far_it_looked(stdio_server):
+    async with Client(stdio_server) as session:
+        result = await session.call_tool(
+            "search_messages", {"channel_id": "222", "query": "nonexistent"}
+        )
+
+    found = result.structured_content["result"]
+    assert found["count"] == 0
+    assert found["scanned"] == 200

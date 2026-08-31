@@ -191,34 +191,31 @@ class DiscordCache:
     async def get_messages(
         self,
         channel_id: str,
-        limit: int,
-        after: Optional[str] = None
+        params: Dict[str, Any],
     ) -> Optional[Dict]:
-        """메시지 목록 캐시에서 가져오기"""
-        params = {"limit": limit, "after": after}
-        key = self.cache._generate_key(
-            f"{self.prefixes['message']}:list",
-            channel_id,
-            params
-        )
-        return await self.cache.get(key)
-    
+        """메시지 목록 캐시에서 가져오기.
+
+        키에는 요청 params 전체가 들어가야 한다. 이전 버전은 limit/after만
+        넣어서, before나 around로 과거를 넘기면 최신 페이지가 되돌아왔다.
+        """
+        return await self.cache.get(self._messages_key(channel_id, params))
+
     async def set_messages(
         self,
         channel_id: str,
         messages_data: Dict,
-        limit: int,
-        after: Optional[str] = None,
+        params: Dict[str, Any],
         ttl: int = 60
     ) -> bool:
         """메시지 목록 캐시에 저장"""
-        params = {"limit": limit, "after": after}
-        key = self.cache._generate_key(
+        return await self.cache.set(self._messages_key(channel_id, params), messages_data, ttl)
+
+    def _messages_key(self, channel_id: str, params: Dict[str, Any]) -> str:
+        return self.cache._generate_key(
             f"{self.prefixes['message']}:list",
             channel_id,
-            params
+            dict(sorted(params.items())),
         )
-        return await self.cache.set(key, messages_data, ttl)
     
     async def invalidate_channel(self, channel_id: str) -> None:
         """채널 관련 캐시 무효화"""

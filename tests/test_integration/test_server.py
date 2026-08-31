@@ -34,6 +34,7 @@ def settings():
 def fake_discord(monkeypatch):
     """네트워크를 타지 않도록 DiscordClient를 대체한다."""
     client = AsyncMock()
+    client.get_application_info.return_value = {"flags": 1 << 18}
     client.get_guilds.return_value = [
         DiscordGuild(id="1", name="Test Guild", icon=None, description=None, member_count=3)
     ]

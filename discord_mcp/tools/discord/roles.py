@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from ...core.logging import log_tool_call, set_request_context
+from ...core import permissions
+from ...core.render import role_brief
 from ...adapters.discord.http import DiscordClient
 
 
@@ -30,7 +32,7 @@ async def list_roles(guild_id: str) -> Dict[str, Any]:
         
         result = {
             "guild_id": guild_id,
-            "roles": [role.model_dump() for role in roles],
+            "roles": [role_brief(role.model_dump()) for role in roles],
             "count": len(roles)
         }
         
@@ -103,42 +105,71 @@ async def remove_role_from_member(
         raise
 
 
+async def _find_channel_in_guild(client, guild_id: str, channel_id: str):
+    """길드 채널 목록에서 채널을 찾는다. 볼 수 없는 채널도 여기엔 나온다."""
+    for channel in await client.get_channels(guild_id):
+        if channel.id == channel_id:
+            return channel
+    raise ValueError(
+        f"Channel {channel_id} is not in guild {guild_id}. Call list_channels to see the "
+        "channels this bot can enumerate."
+    )
+
+
 async def get_permissions(guild_id: str, channel_id: Optional[str] = None) -> Dict[str, Any]:
-    """권한 조회"""
+    """봇의 실효 권한 조회.
+
+    403의 원인을 짚기 위한 툴이다. 그러려면 비트필드가 아니라 **이름**과
+    **어떤 툴이 막히는지**를 돌려줘야 한다. channel_id를 주면 채널
+    오버라이트까지 적용해 그 채널에서의 실효 권한을 계산한다.
+    """
     set_request_context(tool_name="get_permissions", channel_id=channel_id or guild_id)
-    
-    if not _discord_client:
-        raise ValueError("Discord client not initialized")
-    
-    try:
-        # 길드 정보 조회
-        guild = await _discord_client.get_guild(guild_id)
-        
-        result = {
-            "guild_id": guild_id,
-            "guild_name": guild.name,
-            "permissions": {
-                "guild_permissions": guild.permissions,
-                "features": guild.features
-            }
-        }
-        
-        # 채널별 권한이 요청된 경우
-        if channel_id:
-            channel = await _discord_client.get_channel(channel_id)
-            result["channel_permissions"] = {
-                "channel_id": channel_id,
-                "channel_name": channel.name,
-                "permission_overwrites": channel.permission_overwrites
-            }
-        
-        log_tool_call("get_permissions", channel_id=channel_id or guild_id, success=True)
-        return result
-        
-    except Exception as e:
-        logger.error(f"Failed to get permissions for guild {guild_id}: {e}")
-        log_tool_call("get_permissions", channel_id=channel_id or guild_id, success=False, error_message=str(e))
-        raise
 
+    client = _discord_client
+    if not client:
+        raise RuntimeError("Discord client not initialized")
 
-# 툴 등록
+    guild_bits = await client.get_guild_permissions(guild_id)
+    if guild_bits is None:
+        raise ValueError(
+            f"The bot is not a member of guild {guild_id}. Call list_guilds for the guilds it can see."
+        )
+
+    granted = permissions.decode(guild_bits)
+    result: Dict[str, Any] = {
+        "guild_id": guild_id,
+        "guild_permissions": granted,
+    }
+
+    if channel_id:
+        # `GET /channels/{id}`는 봇이 볼 수 없는 채널에 403을 준다 — 그런데 그게
+        # 바로 이 툴을 부르는 상황이다. 길드의 채널 목록은 View Channel 없이도
+        # 오버라이트까지 포함해 돌아오므로 그쪽에서 찾는다.
+        channel = await _find_channel_in_guild(client, guild_id, channel_id)
+        member = await client.get_guild_member_me(guild_id)
+        effective = permissions.effective_channel_permissions(
+            base=guild_bits,
+            guild_id=guild_id,
+            member_role_ids=member.get("roles", []),
+            member_id=(member.get("user") or {}).get("id"),
+            overwrites=[o if isinstance(o, dict) else o.model_dump()
+                        for o in (channel.permission_overwrites or [])],
+        )
+        granted = permissions.decode(effective)
+        result["channel_id"] = channel_id
+        result["channel_name"] = channel.name
+        result["channel_permissions"] = granted
+        result["scope"] = "channel (guild permissions with this channel's overwrites applied)"
+    else:
+        result["scope"] = "guild (channel overwrites not applied — pass channel_id for the effective set)"
+
+    blocked = permissions.blocked_tools(granted)
+    if blocked:
+        result["blocked_tools"] = blocked
+        result["hint"] = (
+            "These tools will fail here until the listed permissions are granted to the bot's "
+            "role in Discord (Server Settings → Roles), or via a channel permission overwrite."
+        )
+
+    log_tool_call("get_permissions", channel_id=channel_id or guild_id, success=True)
+    return result

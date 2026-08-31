@@ -5,7 +5,9 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from ...core.logging import log_tool_call, set_request_context
+from ...core.render import message_brief, webhook_brief
 from ...adapters.discord.http import DiscordClient
+from ...adapters.discord.models import DiscordEmbed
 
 
 # Discord 클라이언트 인스턴스
@@ -79,7 +81,7 @@ async def list_reactions(
             "channel_id": channel_id,
             "message_id": message_id,
             "emoji": emoji,
-            "users": [user.model_dump() for user in users],
+            "users": [{"id": u.id, "name": u.username} for u in users],
             "count": len(users)
         }
         
@@ -148,7 +150,7 @@ async def create_webhook(
     try:
         webhook = await _discord_client.create_webhook(channel_id, name, avatar)
         
-        result = {"webhook": webhook.model_dump()}
+        result = {"webhook": webhook_brief(webhook.model_dump())}
         
         log_tool_call("create_webhook", channel_id=channel_id, success=True)
         return result
@@ -178,15 +180,16 @@ async def send_via_webhook(
         if embeds:
             embed_objects = [DiscordEmbed(**embed) for embed in embeds]
         
-        await _discord_client.send_webhook_message(
+        sent = await _discord_client.send_webhook_message(
             webhook_url=webhook_url,
             content=content,
             username=username,
             avatar_url=avatar_url,
             embeds=embed_objects
         )
-        
-        result = {"message": "Message sent via webhook successfully"}
+
+        # id와 channel_id를 돌려줘야 delete_message로 되돌릴 수 있다.
+        result = {"message": message_brief(sent)}
         
         log_tool_call("send_via_webhook", success=True)
         return result
@@ -198,3 +201,35 @@ async def send_via_webhook(
 
 
 # 툴 등록
+
+
+async def list_webhooks(channel_id: str) -> Dict[str, Any]:
+    """채널의 웹훅 목록"""
+    set_request_context(tool_name="list_webhooks", channel_id=channel_id)
+
+    if not _discord_client:
+        raise RuntimeError("Discord client not initialized")
+
+    hooks = await _discord_client.get_webhooks(channel_id)
+    log_tool_call("list_webhooks", channel_id=channel_id, success=True)
+    return {
+        "channel_id": channel_id,
+        # url은 자격증명이라 목록에서는 뺀다. 폐기에는 id만 있으면 된다.
+        "webhooks": [
+            {"id": h.get("id"), "name": h.get("name"), "channel_id": h.get("channel_id")}
+            for h in hooks
+        ],
+        "count": len(hooks),
+    }
+
+
+async def delete_webhook(webhook_id: str) -> Dict[str, Any]:
+    """웹훅 폐기"""
+    set_request_context(tool_name="delete_webhook")
+
+    if not _discord_client:
+        raise RuntimeError("Discord client not initialized")
+
+    await _discord_client.delete_webhook(webhook_id)
+    log_tool_call("delete_webhook", success=True)
+    return {"deleted": True, "webhook_id": webhook_id}

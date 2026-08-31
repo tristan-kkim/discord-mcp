@@ -10,7 +10,10 @@ class DiscordUser(BaseModel):
     """Discord 사용자 모델"""
     id: str = Field(..., description="사용자 ID")
     username: str = Field(..., description="사용자명")
-    discriminator: str = Field(..., description="구분자")
+    # Discord가 discriminator를 폐기 중이라, 새 계정과 일부 웹훅/앱 객체에는
+    # 아예 없다. 필수로 두면 owner_id 때와 같은 방식으로 조용히 죽는다.
+    discriminator: Optional[str] = Field(None, description="구분자 (레거시)")
+    global_name: Optional[str] = Field(None, description="표시 이름")
     avatar: Optional[str] = Field(None, description="아바타 해시")
     bot: bool = Field(False, description="봇 여부")
     system: bool = Field(False, description="시스템 사용자 여부")

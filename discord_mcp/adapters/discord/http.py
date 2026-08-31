@@ -12,6 +12,7 @@ from ...core.ratelimit import discord_rate_limiter
 from ...core.cache import discord_cache
 from ...core.health import health_checker
 from ...core.logging import log_discord_api_call
+from ...core.errors import discord_code_of
 from .models import (
     DiscordUser, DiscordGuild, DiscordChannel, DiscordMessage, 
     DiscordThread, DiscordRole, DiscordWebhook, DiscordEmbed
@@ -26,6 +27,8 @@ class DiscordClient:
         self.base_url = base_url
         self.session: Optional[aiohttp.ClientSession] = None
         self._connected = False
+        # 봇 자신의 user id. 멤버 조회에 "@me"를 쓸 수 없어서 필요하다.
+        self._bot_user_id: Optional[str] = None
         
         # 기본 헤더
         self.default_headers = {
@@ -48,7 +51,8 @@ class DiscordClient:
             
             # 연결 테스트
             try:
-                await self._make_request("GET", "/users/@me")
+                me = await self._make_request("GET", "/users/@me")
+                self._bot_user_id = me.get("id")
                 self._connected = True
                 health_checker.update_discord_status(True)
                 logger.info("Connected to Discord API")
@@ -124,9 +128,18 @@ class DiscordClient:
                 elif response.status >= 500:
                     raise DiscordAPIError(f"Server error: {response.status}")
                 elif response.status >= 400:
-                    error_data = await response.json()
+                    try:
+                        error_data = await response.json()
+                    except Exception:  # noqa: BLE001 - 본문이 JSON이 아닐 수도 있다
+                        error_data = {}
                     error_message = error_data.get("message", f"HTTP {response.status}")
-                    raise DiscordAPIError(error_message, status_code=response.status)
+                    # Discord의 숫자 코드(50001 Missing Access 등)는 HTTP status보다
+                    # 구체적이라, 모델에게 무엇을 고치라고 말할 때 이게 필요하다.
+                    raise DiscordAPIError(
+                        error_message,
+                        status_code=response.status,
+                        discord_code=discord_code_of(error_data),
+                    )
                 
                 # 응답 데이터 파싱
                 if response.content_type == "application/json":
@@ -290,25 +303,52 @@ class DiscordClient:
         if around:
             params["around"] = around
         
-        # 캐시에서 먼저 확인
-        cached_messages = await discord_cache.get_messages(channel_id, limit, after)
+        # 캐시 키는 params 전체여야 한다. 이전 버전은 (channel, limit, after)만
+        # 썼기 때문에 before/around로 과거를 넘기면 첫 페이지가 그대로 되돌아왔다.
+        cached_messages = await discord_cache.get_messages(channel_id, params)
         if cached_messages:
             return [DiscordMessage(**msg) for msg in cached_messages.get("messages", [])]
-        
+
         response = await self._make_request_with_retry(
-            "GET", 
-            f"/channels/{channel_id}/messages", 
+            "GET",
+            f"/channels/{channel_id}/messages",
             params=params,
-            use_cache=True,
-            cache_ttl=60  # 메시지는 짧은 TTL
         )
-        
+
         messages = [DiscordMessage(**msg) for msg in response]
-        
-        # 캐시에 저장
-        await discord_cache.set_messages(channel_id, {"messages": response}, limit, after)
-        
+
+        await discord_cache.set_messages(channel_id, {"messages": response}, params)
+
         return messages
+
+    async def iter_messages(
+        self,
+        channel_id: str,
+        limit: int,
+        before: Optional[str] = None,
+        after: Optional[str] = None,
+    ) -> List[DiscordMessage]:
+        """`limit`건이 모일 때까지 100건씩 거슬러 올라간다.
+
+        Discord는 한 요청에 100건만 준다. 이전 버전은 `min(limit, 100)`으로
+        조용히 잘라서, limit=1000을 준 호출자에게 100건을 1000건인 양 돌려줬다.
+        """
+        collected: List[DiscordMessage] = []
+        cursor = before
+        while len(collected) < limit:
+            page = await self.get_messages(
+                channel_id=channel_id,
+                limit=min(100, limit - len(collected)),
+                before=cursor,
+                after=after if not collected else None,
+            )
+            if not page:
+                break
+            collected.extend(page)
+            if len(page) < 100:
+                break
+            cursor = page[-1].id
+        return collected[:limit]
     
     async def get_message(self, channel_id: str, message_id: str) -> DiscordMessage:
         """특정 메시지 조회"""
@@ -389,30 +429,98 @@ class DiscordClient:
         query: str,
         author_id: Optional[str] = None,
         has: Optional[str] = None,
-        max_id: Optional[str] = None,
-        min_id: Optional[str] = None
+        scan_limit: int = 200,
+        before: Optional[str] = None,
+        after: Optional[str] = None,
     ) -> List[DiscordMessage]:
-        """메시지 검색"""
-        params = {"q": query}
-        if author_id:
-            params["author_id"] = author_id
-        if has:
-            params["has"] = has
-        if max_id:
-            params["max_id"] = max_id
-        if min_id:
-            params["min_id"] = min_id
-        
-        response = await self._make_request_with_retry("GET", f"/guilds/{channel_id}/messages/search", params=params)
-        
-        # 검색 결과에서 메시지 추출
-        messages = []
-        for result in response.get("messages", []):
-            for message_data in result:
-                messages.append(DiscordMessage(**message_data))
-        
-        return messages
-    
+        """채널 최근 기록을 직접 훑어 필터한다.
+
+        서버사이드 검색(`GET /guilds/{id}/messages/search`)은 유저 토큰 전용이라
+        봇은 401/403을 받는다. 이전 버전은 그 엔드포인트를, 그것도 guild 자리에
+        channel_id를 넣어 호출했으므로 이 툴은 한 번도 성공한 적이 없다.
+        """
+        messages = await self.iter_messages(
+            channel_id=channel_id, limit=scan_limit, before=before, after=after
+        )
+
+        needle = query.lower()
+        matches = []
+        for message in messages:
+            if author_id and message.author.id != author_id:
+                continue
+            if has and not self._message_has(message, has):
+                continue
+            if needle and needle not in self._searchable_text(message).lower():
+                continue
+            matches.append(message)
+        return matches
+
+    @staticmethod
+    def _searchable_text(message: DiscordMessage) -> str:
+        """본문 + 임베드 텍스트 + 첨부 파일명. 임베드만 있는 봇 글도 걸리게 한다."""
+        parts = [message.content]
+        for embed in message.embeds:
+            parts.extend(filter(None, [embed.title, embed.description, embed.url]))
+            for field in embed.fields:
+                parts.extend(str(field.get(k, "")) for k in ("name", "value"))
+        parts.extend(a.filename for a in message.attachments)
+        return " ".join(p for p in parts if p)
+
+    @staticmethod
+    def _message_has(message: DiscordMessage, has: str) -> bool:
+        kind = has.lower()
+        if kind == "link":
+            return "http://" in message.content or "https://" in message.content
+        if kind == "embed":
+            return bool(message.embeds)
+        if kind == "file":
+            return bool(message.attachments)
+        if kind == "image":
+            return any(
+                (a.content_type or "").startswith("image/") for a in message.attachments
+            )
+        raise ValueError(
+            f"has must be one of: link, embed, file, image (got {has!r})"
+        )
+
+    async def get_current_user_id(self) -> str:
+        """봇 자신의 user id."""
+        if not self._bot_user_id:
+            me = await self._make_request_with_retry("GET", "/users/@me", use_cache=True)
+            self._bot_user_id = me["id"]
+        return self._bot_user_id
+
+    async def get_guild_member_me(self, guild_id: str) -> Dict[str, Any]:
+        """길드 안에서 봇 자신의 멤버 객체.
+
+        어떤 role을 갖고 있는지 알아야 채널 오버라이트를 적용해 실효 권한을
+        계산할 수 있다. `@me` 별칭은 이 경로에서 동작하지 않고
+        (`50035 Value "@me" is not snowflake`), `/users/@me/guilds/{id}/member`는
+        봇에게 닫혀 있다 (`20001`). 실제 id를 넣는 형태만 남는다.
+        """
+        user_id = await self.get_current_user_id()
+        return await self._make_request_with_retry(
+            "GET", f"/guilds/{guild_id}/members/{user_id}", use_cache=True, cache_ttl=60
+        )
+
+    async def get_guild_permissions(self, guild_id: str) -> Optional[str]:
+        """길드 레벨에서 봇에게 부여된 권한 비트.
+
+        `GET /guilds/{id}`에는 이 필드가 없다 — partial guild를 주는
+        `/users/@me/guilds`에만 있다. 이전 버전은 전자를 읽어 항상 null이었다.
+        """
+        response = await self._make_request_with_retry(
+            "GET", "/users/@me/guilds", use_cache=True
+        )
+        for guild in response:
+            if guild.get("id") == guild_id:
+                return guild.get("permissions")
+        return None
+
+    async def get_application_info(self) -> Dict[str, Any]:
+        """봇 애플리케이션 정보. Message Content Intent 활성 여부 확인용."""
+        return await self._make_request_with_retry("GET", "/applications/@me")
+
     # Thread 관련 메서드
     async def create_thread(
         self,
@@ -442,11 +550,41 @@ class DiscordClient:
         
         return DiscordThread(**response)
     
-    async def get_threads(self, channel_id: str) -> List[DiscordThread]:
-        """스레드 목록 조회"""
-        response = await self._make_request_with_retry("GET", f"/channels/{channel_id}/threads")
-        return [DiscordThread(**thread) for thread in response.get("threads", [])]
-    
+    async def get_threads(
+        self, channel_id: str, include_archived: bool = True
+    ) -> List[DiscordThread]:
+        """채널의 스레드 목록.
+
+        `GET /channels/{id}/threads`는 존재하지 않는 경로다 — 실제로 호출하면
+        405 Method Not Allowed가 돌아오고, 이전 구현은 그걸 호출하고 있었다.
+        활성 스레드는 길드 단위로만 조회되므로 받아서 parent_id로 거르고,
+        아카이브된 스레드는 채널 단위 경로에서 따로 가져온다.
+        """
+        channel = await self.get_channel(channel_id)
+        guild_id = channel.guild_id
+        if not guild_id:
+            raise DiscordAPIError(
+                f"Channel {channel_id} is not in a guild, so it cannot have threads.",
+                status_code=400,
+            )
+
+        active = await self._make_request_with_retry(
+            "GET", f"/guilds/{guild_id}/threads/active"
+        )
+        threads = [
+            DiscordThread(**t)
+            for t in active.get("threads", [])
+            if t.get("parent_id") == channel_id
+        ]
+
+        if include_archived:
+            archived = await self._make_request_with_retry(
+                "GET", f"/channels/{channel_id}/threads/archived/public"
+            )
+            threads.extend(DiscordThread(**t) for t in archived.get("threads", []))
+
+        return threads
+
     async def archive_thread(self, channel_id: str) -> DiscordThread:
         """스레드 아카이브"""
         response = await self._make_request_with_retry("PATCH", f"/channels/{channel_id}", data={"archived": True})
@@ -504,20 +642,38 @@ class DiscordClient:
         return [DiscordUser(**user) for user in response]
     
     # Pin 관련 메서드
+    # 핀 경로는 `/channels/{id}/pins/...`에서 `/channels/{id}/messages/pins/...`로
+    # 옮겨갔고, 새 경로는 MANAGE_MESSAGES가 아니라 별도의 PIN_MESSAGES 권한을
+    # 요구한다. 구 경로는 deprecated이므로 현행 경로만 쓴다.
     async def pin_message(self, channel_id: str, message_id: str) -> None:
         """메시지 고정"""
-        await self._make_request_with_retry("PUT", f"/channels/{channel_id}/pins/{message_id}")
-    
+        await self._make_request_with_retry(
+            "PUT", f"/channels/{channel_id}/messages/pins/{message_id}"
+        )
+        await discord_cache.invalidate_channel(channel_id)
+
     async def unpin_message(self, channel_id: str, message_id: str) -> None:
         """메시지 고정 해제"""
-        await self._make_request_with_retry("DELETE", f"/channels/{channel_id}/pins/{message_id}")
-    
+        await self._make_request_with_retry(
+            "DELETE", f"/channels/{channel_id}/messages/pins/{message_id}"
+        )
+        await discord_cache.invalidate_channel(channel_id)
+
     async def get_pinned_messages(self, channel_id: str) -> List[DiscordMessage]:
-        """고정된 메시지 목록 조회"""
-        response = await self._make_request_with_retry("GET", f"/channels/{channel_id}/pins")
-        return [DiscordMessage(**msg) for msg in response]
-    
-    # Role 관련 메서드
+        """고정된 메시지 목록.
+
+        현행 경로는 배열이 아니라 `{"items": [{"pinned_at", "message"}], "has_more"}`를
+        돌려준다. 구 경로의 배열 형태도 아직 살아 있어 둘 다 받는다.
+        """
+        response = await self._make_request_with_retry(
+            "GET", f"/channels/{channel_id}/messages/pins"
+        )
+        if isinstance(response, dict):
+            items = [item.get("message", item) for item in response.get("items", [])]
+        else:
+            items = response
+        return [DiscordMessage(**msg) for msg in items]
+
     async def get_roles(self, guild_id: str) -> List[DiscordRole]:
         """역할 목록 조회"""
         response = await self._make_request_with_retry("GET", f"/guilds/{guild_id}/roles")
@@ -546,6 +702,18 @@ class DiscordClient:
         response = await self._make_request_with_retry("POST", f"/channels/{channel_id}/webhooks", data=data)
         return DiscordWebhook(**response)
     
+    async def get_webhooks(self, channel_id: str) -> List[Dict[str, Any]]:
+        """채널의 웹훅 목록. url은 토큰을 포함하므로 여기서는 그대로 싣지 않는다."""
+        return await self._make_request_with_retry("GET", f"/channels/{channel_id}/webhooks")
+
+    async def delete_webhook(self, webhook_id: str) -> None:
+        """웹훅 폐기.
+
+        create_webhook은 자격증명을 만든다. 폐기 경로가 없으면 이 서버는
+        스스로 만든 것을 회수할 수 없고, 유출된 URL은 영구히 유효하다.
+        """
+        await self._make_request_with_retry("DELETE", f"/webhooks/{webhook_id}")
+
     async def send_webhook_message(
         self,
         webhook_url: str,
@@ -553,8 +721,13 @@ class DiscordClient:
         username: Optional[str] = None,
         avatar_url: Optional[str] = None,
         embeds: Optional[List[DiscordEmbed]] = None
-    ) -> None:
-        """웹훅으로 메시지 전송"""
+    ) -> Dict[str, Any]:
+        """웹훅으로 메시지 전송하고 만들어진 메시지를 돌려준다.
+
+        `?wait=true` 없이 부르면 Discord는 204를 주고 메시지 객체를 돌려주지
+        않는다. 그러면 방금 만든 글의 id를 알 방법이 없어 지울 수도 없다 —
+        되돌릴 수 없는 쓰기를 남기는 셈이라 항상 wait한다.
+        """
         # send_message와 동일한 멘션 가드를 적용한다. 없으면 모델이 웹훅 경로로
         # @everyone 필터를 그대로 우회할 수 있다.
         content = self._sanitize_content(content)
@@ -570,9 +743,18 @@ class DiscordClient:
         if embeds:
             data["embeds"] = [embed.model_dump() for embed in embeds]
         
-        # 웹훅은 별도 세션 사용
+        # 웹훅 URL은 봇 토큰이 아닌 자체 자격증명이라 별도 세션을 쓴다.
+        separator = "&" if "?" in webhook_url else "?"
         async with aiohttp.ClientSession() as session:
-            async with session.post(webhook_url, json=data) as response:
+            async with session.post(f"{webhook_url}{separator}wait=true", json=data) as response:
                 if response.status >= 400:
-                    error_text = await response.text()
-                    raise DiscordAPIError(f"Webhook error: {error_text}", status_code=response.status)
+                    try:
+                        error_data = await response.json()
+                    except Exception:  # noqa: BLE001
+                        error_data = {"message": await response.text()}
+                    raise DiscordAPIError(
+                        error_data.get("message", f"Webhook error: HTTP {response.status}"),
+                        status_code=response.status,
+                        discord_code=discord_code_of(error_data),
+                    )
+                return await response.json()

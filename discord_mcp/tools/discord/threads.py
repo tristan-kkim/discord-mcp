@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 from loguru import logger
 
 from ...core.logging import log_tool_call, set_request_context
+from ...core.render import thread_brief
 from ...adapters.discord.http import DiscordClient
 
 
@@ -38,7 +39,7 @@ async def create_thread(
             auto_archive_duration=auto_archive_duration
         )
         
-        result = {"thread": thread.model_dump()}
+        result = {"thread": thread_brief(thread.model_dump())}
         
         log_tool_call("create_thread", channel_id=channel_id, success=True)
         return result
@@ -61,7 +62,7 @@ async def list_threads(channel_id: str) -> Dict[str, Any]:
         
         result = {
             "channel_id": channel_id,
-            "threads": [thread.model_dump() for thread in threads],
+            "threads": [thread_brief(thread.model_dump()) for thread in threads],
             "count": len(threads)
         }
         
@@ -84,7 +85,7 @@ async def archive_thread(thread_id: str) -> Dict[str, Any]:
     try:
         thread = await _discord_client.archive_thread(thread_id)
         
-        result = {"thread": thread.model_dump()}
+        result = {"thread": thread_brief(thread.model_dump())}
         
         log_tool_call("archive_thread", channel_id=thread_id, success=True)
         return result
@@ -105,7 +106,7 @@ async def unarchive_thread(thread_id: str) -> Dict[str, Any]:
     try:
         thread = await _discord_client.unarchive_thread(thread_id)
         
-        result = {"thread": thread.model_dump()}
+        result = {"thread": thread_brief(thread.model_dump())}
         
         log_tool_call("unarchive_thread", channel_id=thread_id, success=True)
         return result

@@ -20,7 +20,7 @@ dependencies = [
     "mcp>=2.2.0",
     "aiohttp>=3.14.3",
     "pydantic>=2.13.5",
-    "loguru>=0.7",
+    "loguru>=0.7.3",
     "tenacity>=8.2",
 ]
 

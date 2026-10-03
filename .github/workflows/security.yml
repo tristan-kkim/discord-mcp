@@ -1,26 +1,283 @@
-# 보안 기준선 스캔 — 공용 재사용 워크플로 호출
+# ⚠️ 이 파일은 cortexys.web/.github/workflows/security-scan.yml 의 **사본**이다.
 #
-# 실제 내용은 cortexys.web/.github/workflows/security-scan.yml 한 곳에 있다.
-# 리포마다 복사하면 도구 버전과 예외 목록이 갈라지고, 한쪽만 고치는 순간
-# 기준선이 기준선이 아니게 된다. 설계와 근거는 그 리포의
-# docs/SECURITY_BASELINE.md.
+# 다른 리포는 전부 그 파일을 재사용 워크플로로 호출한다. 이 리포만 사본인 이유는
+# 공개 여부가 다르기 때문이다 — 이 리포는 **공개** 리포이고 원본은 개인 계정의
+# **비공개** 리포다. GitHub 은 비공개 리포의 재사용 워크플로 접근을 "비공개 리포에서만"
+# 허용한다 (Settings → Actions → Access 의 user 설정 설명: "Access is allowed only from
+# private repositories"). 실측: 2026-09-21 도입 이후 9회 전부 실패 — 잡이 생기지 않고
+# "This run likely failed because of a workflow file issue" 만 남았다 (2026-10-03 확인).
 #
-# 기본은 보고 전용이다. 검출돼도 job 은 실패하지 않는다.
-# 차단으로 바꾸려면 이 리포에 변수 SECURITY_ENFORCE=true 를 두고,
-# 브랜치 보호 규칙에 이 체크를 추가한다 (둘 다 필요하다).
+# 즉 이 사본은 기준선이 깨진 상태가 아니라, 공개·비공개가 갈린 동안의 조치다.
+# 원본을 고치면 **이 파일도 같이 고쳐야 한다.** 원본이 공개 리포로 옮겨지면
+# 사본을 지우고 호출 네 줄로 되돌릴 것. (cortexys.web/docs/SECURITY_BASELINE.md §8)
 #
-# push: main 은 일부러 넣지 않았다 — 관제 대시보드가 리포별 "가장 최근 실행"을
-# 파이프라인 상태로 쓰기 때문에, push 에 걸면 빨간 CI 를 초록 Security 가 덮을 수 있다.
-name: Security
+# 보안 기준선 스캔 — 전 리포 공용 재사용 워크플로
+#
+# 설계와 근거는 docs/SECURITY_BASELINE.md. 여기서는 구현상의 결정만 적는다.
+#
+# ── 왜 재사용 워크플로인가 ──────────────────────────────────────────────
+# 리포 13개에 같은 파일을 복사하면 도구 버전과 예외 목록이 13벌로 갈라진다.
+# 한쪽만 고치는 순간 "기준선"이 기준선이 아니게 된다. 호출하는 쪽에 두는 것은
+# `uses:` 네 줄뿐이다 (SECURITY_BASELINE.md §8).
+#
+# ── 왜 액션이 아니라 컨테이너로 도구를 돌리는가 ────────────────────────
+# gitleaks-action v2 는 조직 소유 리포에서 GITLEAKS_LICENSE 를 요구한다. 지금은
+# 전 리포가 개인 계정 소유라 무료지만, 나중에 조직으로 옮기면 그날 전 리포의
+# 스캔이 한꺼번에 멎는다. 공식 컨테이너는 그 조건이 없다. semgrep 도 같은 이유다
+# (`semgrep ci` 는 SEMGREP_APP_TOKEN 을 원한다 — `semgrep scan` 은 아니다).
+#
+# ── 왜 리포마다 인자를 주지 않는가 ──────────────────────────────────────
+# Trivy 이미지 대상과 Checkov 대상은 파일 존재로 스스로 판정한다. 리포마다 다른
+# 인자를 기억하게 만들면 새 리포에서 빠지고, 빠진 것은 티가 나지 않는다.
+#
+# ── 차단은 이 파일이 하지 않는다 ────────────────────────────────────────
+# job 이 빨개지는 것과 병합이 막히는 것은 별개다. 병합 차단은 리포 설정의
+# 브랜치 보호이고 사람이 켠다. 이 파일은 `vars.SECURITY_ENFORCE` 로 "빨개질지"
+# 만 정한다. 기본은 보고 전용 — 검출 건수가 0 이 아닌 리포에서 먼저 켜면 그날부터
+# 모든 PR 이 막힌다.
 
+name: Security Scan
+
+# ⚠️ push: main 을 일부러 넣지 않았다.
+# 관제 대시보드는 리포별 "가장 최근 CI 실행 하나"를 파이프라인 상태로 쓰고,
+# 거기서 걸러지는 것은 event='schedule' 뿐이다
+# (src/app/api/ops/projects/route.ts, alerts/run/route.ts).
+# push 에 걸면 이 워크플로가 CI·Deploy 와 같은 순간에 출발해서, CI 가 빨간
+# 푸시에서 초록 Security Scan 이 몇 초 차이로 최신 실행을 차지할 수 있다.
+# 관제 화면이 조용히 거짓말을 하는 상태이고, 이건 화면이 없는 것보다 나쁘다
+# (2026-09-14 에 allthathealing-app keep-alive 가 같은 방식으로 push CI 실패를
+#  가린 적이 있다 — 그래서 schedule 이 걸러지게 된 것이다).
+#
+# 대신 PR 에서 매번 돌고, 주 1회 예약 실행이 백스톱이다. main 에 직접 커밋하는
+# 경우 최대 7일까지 스캔이 늦을 수 있다는 뜻이고, 그게 지금의 트레이드오프다.
+# 관제 쪽 선택 기준이 워크플로 이름을 구분하게 되면 그때 push 를 넣으면 된다.
 on:
   pull_request:
   schedule:
-    - cron: "0 20 * * 0"   # 매주 월요일 05:00 KST
+    # 매주 월요일 05:00 KST. 코드가 그대로여도 CVE 는 새로 나온다.
+    - cron: "0 20 * * 0"
   workflow_dispatch:
 
+# 재사용 워크플로에서 `vars` 는 **호출한 리포**의 변수로 해석된다. 리포마다
+# 현재 검출 건수가 다르므로 전환도 리포마다 따로 한다.
+env:
+  ENFORCE: ${{ vars.SECURITY_ENFORCE == 'true' }}
+
+permissions:
+  contents: read
+
+concurrency:
+  # ci.yml 과 다른 그룹이어야 한다. 같은 그룹을 쓰면 둘이 서로를 취소한다.
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  scan:
-    uses: tristan-kkim/cortexys.web/.github/workflows/security-scan.yml@main
-    permissions:
-      contents: read
+  # ── 시크릿 탐지 ────────────────────────────────────────────────────────
+  gitleaks:
+    name: 시크릿 (Gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # 커밋된 뒤 지운 시크릿은 워킹트리에 없다. 히스토리를 봐야 잡힌다.
+          fetch-depth: 0
+
+      - name: Gitleaks
+        id: scan
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:latest \
+            detect --source=/repo --no-banner --redact \
+            --report-format json --report-path /repo/gitleaks-report.json
+        # 리포 루트의 .gitleaks.toml 이 있으면 자동으로 읽는다. 확인된 오탐은
+        # 규칙을 끄지 말고 거기에 값·경로를 특정해서 넣을 것.
+
+      - name: 결과 요약
+        run: |
+          python3 - <<'PY' > gsum.md
+          import json
+          # 결과 파일이 없으면 "0건"이 아니라 "스캔 실패"다 (deploy.yml 과 같은 원칙).
+          try:
+              leaks = json.load(open('gitleaks-report.json'))
+          except Exception as e:
+              print('### 시크릿 탐지 (Gitleaks)')
+              print(f'⚠️ **스캔 실패** ({type(e).__name__}) — 0건이 아니다.')
+              open('gcount.txt', 'w').write('FAIL')
+              raise SystemExit(0)
+          print('### 시크릿 탐지 (Gitleaks)')
+          print(f'검출 **{len(leaks)}건**')
+          if leaks:
+              print()
+              print('| 규칙 | 위치 |')
+              print('|---|---|')
+              for x in leaks[:30]:
+                  print(f"| {x['RuleID']} | `{x['File']}:{x['StartLine']}` |")
+              print()
+              print('오탐이면 `.gitleaks.toml` 의 allowlist 에 값·경로를 특정해 넣는다. 규칙 자체를 끄지 말 것.')
+          open('gcount.txt', 'w').write(str(len(leaks)))
+          PY
+          cat gsum.md >> "$GITHUB_STEP_SUMMARY"
+          N=$(cat gcount.txt 2>/dev/null || echo FAIL)
+          if [ "$N" = "FAIL" ]; then echo "::warning::Gitleaks 스캔 실패"; fi
+          if [ "$N" != "0" ] && [ "${ENFORCE}" = "true" ]; then exit 1; fi
+
+  # ── 코드 정적분석 ──────────────────────────────────────────────────────
+  semgrep:
+    name: 정적분석 (Semgrep OSS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Semgrep
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep:latest \
+            semgrep scan --config=p/default --metrics=off --json \
+            > semgrep.json 2>semgrep.err || true
+          tail -5 semgrep.err || true
+
+      - name: 결과 요약
+        run: |
+          python3 - <<'PY' > summary.md
+          import json, collections
+          try:
+              r = json.load(open('semgrep.json')).get('results', [])
+          except Exception as e:
+              print('### 정적분석 (Semgrep OSS)')
+              print(f'⚠️ **스캔 실패** ({type(e).__name__}) — 0건이 아니다.')
+              open('errors.txt', 'w').write('FAIL')
+              raise SystemExit(0)
+          sev = collections.Counter(x['extra']['severity'] for x in r)
+          print('### 정적분석 (Semgrep OSS)')
+          print(f'검출 **{len(r)}건** — ' + (', '.join(f'{k} {v}' for k, v in sev.most_common()) or '없음'))
+          if r:
+              print()
+              print('| 심각도 | 규칙 | 위치 |')
+              print('|---|---|---|')
+              for x in r[:30]:
+                  cid = x['check_id'].split('.')[-1]
+                  print(f"| {x['extra']['severity']} | {cid} | `{x['path']}:{x['start']['line']}` |")
+              if len(r) > 30:
+                  print(f'| … | 외 {len(r)-30}건 | |')
+          # ERROR 만 차단 대상으로 센다. WARNING/INFO 까지 게이트로 삼으면
+          # 실제로 막히는 것은 보안이 아니라 개발이다. GITHUB_ENV 는 다음
+          # 스텝부터 반영되므로 같은 스텝에서 쓰려면 파일로 넘겨야 한다.
+          open('errors.txt', 'w').write(str(sev.get('ERROR', 0)))
+          PY
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+          ERRORS=$(cat errors.txt 2>/dev/null || echo FAIL)
+          if [ "$ERRORS" = "FAIL" ]; then echo "::warning::Semgrep 스캔 실패"; fi
+          if [ "$ERRORS" != "0" ] && [ "${ENFORCE}" = "true" ]; then
+            echo "ERROR 심각도 ${ERRORS}건" && exit 1
+          fi
+
+  # ── IaC 설정 오류 ──────────────────────────────────────────────────────
+  checkov:
+    name: IaC (Checkov)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 테라폼 파일 탐지
+        id: detect
+        run: |
+          # .terraform 캐시 안의 모듈은 우리 코드가 아니다.
+          if find . -name '*.tf' -not -path '*/.terraform/*' | grep -q .; then
+            echo "found=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=0" >> "$GITHUB_OUTPUT"
+            echo "### IaC (Checkov)" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`*.tf\` 없음 — 건너뜀" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # 예외는 검사 ID 를 특정해서만 끈다. 프레임워크·심각도 단위로 끄지 않는다.
+      # 사유 없는 예외를 추가하는 순간 이 게이트는 장식이 된다.
+      #
+      #   CKV_AWS_260  80 번 인바운드 0.0.0.0/0 — Caddy 가 공개 웹을 서빙한다.
+      #                22 번은 열려 있지 않다 (접근은 SSM 전용).
+      #   CKV_AWS_382  전체 이그레스 — ECR·npm·외부 API 를 당겨야 한다.
+      #   CKV_AWS_54/56/70, CKV2_AWS_6
+      #                cortexys-blog-images 퍼블릭 읽기 — 블로그 이미지를
+      #                <img src> 로 직접 서빙한다. 나머지 버킷은 전부 차단돼 있다.
+      #   CKV_AWS_35/136/145
+      #                KMS CMK 대신 기본 암호화(SSE-S3/AES256). CMK 는 키당 월 $1 +
+      #                요청 과금이고, 이 계정은 2026-08 에 비용 미납으로 정지된 적이
+      #                있다. 암호화 자체는 켜져 있다.
+      #   CKV_AWS_144  S3 교차 리전 복제 — 스토리지 비용 2 배.
+      #   CKV_AWS_126  EC2 상세 모니터링 — 인스턴스당 과금.
+      #   CKV_AWS_135  EBS 최적화 — t4g 는 기본 활성이다. 버스터블에 대한 오탐.
+      #   CKV2_AWS_62  S3 이벤트 알림 — 이 버킷들의 용도와 무관하다.
+      - name: Checkov
+        if: steps.detect.outputs.found == '1'
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD:/repo" bridgecrew/checkov:latest \
+            -d /repo --framework terraform --compact --quiet \
+            --skip-check CKV_AWS_260,CKV_AWS_382,CKV_AWS_54,CKV_AWS_56,CKV_AWS_70,CKV2_AWS_6,CKV_AWS_35,CKV_AWS_136,CKV_AWS_145,CKV_AWS_144,CKV_AWS_126,CKV_AWS_135,CKV2_AWS_62 \
+            > checkov.txt 2>&1 || true
+          sed -i 's/\x1b\[[0-9;]*m//g' checkov.txt
+
+      - name: 결과 요약
+        if: steps.detect.outputs.found == '1'
+        run: |
+          LINE=$(grep -m1 '^Passed checks:' checkov.txt || echo "Passed checks: ?, Failed checks: ?")
+          FAILED=$(echo "$LINE" | sed -n 's/.*Failed checks: \([0-9]*\).*/\1/p')
+          {
+            echo "### IaC (Checkov)"
+            echo "$LINE"
+            if [ "${FAILED:-0}" != "0" ]; then
+              echo '```'
+              awk '/^Check: /{c=$0} /FAILED for resource/{printf "%s\n    %s\n", c, $0}' checkov.txt | head -60
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${FAILED:-0}" != "0" ] && [ "${ENFORCE}" = "true" ]; then exit 1; fi
+
+  # ── 의존성·IaC 파일 스캔 ───────────────────────────────────────────────
+  # 이미지 CVE 는 여기서 볼 수 없다. 이미지는 CI 에 존재하지 않고 deploy.yml 의
+  # ECR push 시점에만 있다 — 그래서 이미지 게이트는 deploy.yml 에 있다.
+  trivy-fs:
+    name: 의존성 (Trivy fs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Trivy fs
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo aquasec/trivy:latest \
+            fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+            --format json --output /repo/trivy.json . || true
+
+      - name: 결과 요약
+        run: |
+          python3 - <<'PY' > tsum.md
+          import json
+          try:
+              res = json.load(open('trivy.json')).get('Results') or []
+          except Exception as e:
+              print('### 의존성 (Trivy fs)')
+              print(f'⚠️ **스캔 실패** ({type(e).__name__}) — 0건이 아니다.')
+              open('tcount.txt', 'w').write('FAIL')
+              raise SystemExit(0)
+          rows = [(r.get('Target',''), v) for r in res for v in (r.get('Vulnerabilities') or [])]
+          print('### 의존성 (Trivy fs · HIGH/CRITICAL · 수정본 있는 것만)')
+          print(f'검출 **{len(rows)}건**')
+          if rows:
+              print()
+              print('| 심각도 | 패키지 | ID | 수정 버전 |')
+              print('|---|---|---|---|')
+              for _, v in rows[:30]:
+                  print(f"| {v.get('Severity')} | {v.get('PkgName')} {v.get('InstalledVersion')} | {v.get('VulnerabilityID')} | {v.get('FixedVersion','-')} |")
+              if len(rows) > 30:
+                  print(f'| … | 외 {len(rows)-30}건 | | |')
+          open('tcount.txt', 'w').write(str(len(rows)))
+          PY
+          cat tsum.md >> "$GITHUB_STEP_SUMMARY"
+          N=$(cat tcount.txt 2>/dev/null || echo FAIL)
+          if [ "$N" = "FAIL" ]; then echo "::warning::Trivy fs 스캔 실패"; fi
+          if [ "$N" != "0" ] && [ "${ENFORCE}" = "true" ]; then exit 1; fi
